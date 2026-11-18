@@ -1,2 +1,2 @@
-// Set this to your own Cloudflare Worker URL after deployment.
-window.NORTHGO_API_BASE = "__API_BASE__";
+// Northgo Cloudflare API
+window.NORTHGO_API_BASE = "https://northgo-inquiry-crud.ymonsterb.workers.dev";
