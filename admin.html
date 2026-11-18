@@ -21,7 +21,7 @@
   <div class="notice" id="notice" role="status" aria-live="polite"></div>
   <script>
     (()=>{
-      const API_BASE='__API_BASE__';
+      const API_BASE='https://northgo-inquiry-crud.ymonsterb.workers.dev';
       const tokenKey='northgo.admin.token';
       const loginScreen=document.querySelector('#login-screen'), app=document.querySelector('#app'), loginForm=document.querySelector('#login-form'), loginError=document.querySelector('#login-error'), rows=document.querySelector('#rows'), empty=document.querySelector('#empty'), notice=document.querySelector('#notice'), modal=document.querySelector('#modal'), form=document.querySelector('#inquiry-form');
       let token=sessionStorage.getItem(tokenKey)||'',editingId=null,allItems=[];
