@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "northgo-inquiry-admin",
+  "name": "northgo-inquiry-crud",
   "main": "worker.js",
   "compatibility_date": "2026-11-18",
   "workers_dev": true,
@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "northgo-inquiries",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+      "database_id": "b7649afb-7ca4-455b-a0e7-3413990f4848"
     }
   ]
 }
