@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "northgo-inquiry-admin",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-18",
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGIN": "https://ymonsterb-hash.github.io"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "northgo-inquiries",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ]
+}

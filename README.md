@@ -3,7 +3,7 @@
 課堂作業：分析 Northgo 官方網站，整理成可搜尋、響應式 HTML 網站地圖。
 
 - 入口檔：`index.html`（可直接部署到 GitHub Pages 根目錄）
-- 版本：`1.1.4`
+- 版本：`1.2.0`
 - 網站內容核對日：2026-11-18
 - 來源：<https://www.northgo.com/>
 - `freight-logistics.html`：新增貨運物流專頁，包含響應式港口主視覺、海運／空運／陸運／報關、合作流程與出貨準備清單。
@@ -17,3 +17,7 @@
 ## 後續更新流程
 
 先用自然語言描述要修改的內容並完成更新；確認後輸入 `bump, push and deploy`，將版本號加一個 patch、提交 Git 變更、推送至 GitHub，並部署 GitHub Pages。執行前需先設定自己的 repository remote 與 GitHub 登入。
+
+## 客戶詢問管理（v1.2.0）
+
+前台貨運物流頁新增詢問表單；後端 Worker 與 D1 設定檔為 `worker.js`、`schema.sql`、`wrangler.jsonc`。管理介面：`admin.html`。部署前需在 Cloudflare 設定 D1 binding 與管理者 secrets，並將 `api-config.js` 及 `admin.html` 的 API base 設為自己的 Worker URL。
