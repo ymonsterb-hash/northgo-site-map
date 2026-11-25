@@ -4,7 +4,10 @@ const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 function corsHeaders(request, env) {
   const origin = request.headers.get("Origin") || "";
-  const allowed = env.ALLOWED_ORIGIN || "https://ymonsterb-hash.github.io";
+  const allowed = String(env.ALLOWED_ORIGIN || env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   const headers = new Headers({
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
@@ -12,7 +15,7 @@ function corsHeaders(request, env) {
     "Access-Control-Max-Age": "86400",
     "Cache-Control": "no-store"
   });
-  if (origin === allowed) headers.set("Access-Control-Allow-Origin", allowed);
+  if (origin && allowed.includes(origin)) headers.set("Access-Control-Allow-Origin", origin);
   return headers;
 }
 
@@ -64,15 +67,19 @@ function constantTimeTextEqual(leftValue, rightValue) {
 }
 
 function adminUsername(env) {
-  return env.ADMIN_USERNAME || "admin";
+  return String(env.ADMIN_USERNAME || "").trim();
 }
 
 function adminPassword(env) {
-  return env.ADMIN_PASSWORD || "northgo-admin";
+  return String(env.ADMIN_PASSWORD || "");
 }
 
 function sessionSecret(env) {
-  return env.SESSION_SECRET || "northgo-demo-session-change-me";
+  return String(env.SESSION_SECRET || "");
+}
+
+function authConfigured(env) {
+  return Boolean(adminUsername(env) && adminPassword(env) && sessionSecret(env));
 }
 
 async function issueToken(username, env) {
@@ -84,6 +91,7 @@ async function issueToken(username, env) {
 }
 
 async function verifyToken(request, env) {
+  if (!authConfigured(env)) return null;
   const header = request.headers.get("Authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const [payload, signature, extra] = token.split(".");
@@ -158,6 +166,9 @@ async function publicCreate(request, env) {
 }
 
 async function adminLogin(request, env) {
+  if (!authConfigured(env)) {
+    return json(request, env, { error: "管理登入尚未設定，請設定 Worker secrets。" }, 503);
+  }
   const body = await readJson(request);
   if (!body || typeof body.username !== "string" || typeof body.password !== "string") {
     return json(request, env, { error: "請輸入帳號與密碼。" }, 400);

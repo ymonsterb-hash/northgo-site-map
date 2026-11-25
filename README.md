@@ -34,23 +34,22 @@
 
 前台貨運物流頁（`freight-logistics.html`）的詢問表單會送到 API；後台 `admin.html`（「客戶詢問」）可完整 CRUD。
 
-### 登入（課堂示範）
+### 登入
 
 - 管理後台（GitHub Pages）：https://ymonsterb-hash.github.io/northgo-site-map/admin.html
-- 帳號：`admin`
-- 密碼：`northgo-admin`
-- API base：見 `api-config.js`（CORS 允許 `https://ymonsterb-hash.github.io`）
+- API base：見 `api-config.js`
+- 帳密由 Cursor Apps secrets 提供（`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET`、`ALLOWED_ORIGINS`），不寫進原始碼或登入頁。
 
 ### 資料怎麼存
 
-1. **預設（耐久、免 wrangler）**：**Cursor publish-app** + Postgres（`cursor-app.json`、`server.mjs`、`migrations/`）。發布時選 **Public**。`api-config.js` 指向該公開 app 網址；也可直接開 Cursor app 上的 `/admin.html`（同網域 API）。
-2. **本機**：`npm install && npm start` → http://127.0.0.1:8787 （PGlite；課堂帳密可用）。
+1. **預設（耐久、免 wrangler）**：**Cursor publish-app** + Postgres（`cursor-app.json`、`server.mjs`、`migrations/`）。發布時選 **Public**，並在 Apps Secrets 設定管理帳密與 CORS。`api-config.js` 指向該公開 app 網址；也可直接開 Cursor app 上的 `/admin.html`（同網域 API）。
+2. **本機**：`npm install` 後以環境變數啟動（見下方）。
 3. **可選／舊版**：Cloudflare Worker + D1（`worker.js`）。需自行設定 Worker secrets；本作業不再依賴 Brenda 執行 wrangler。
 
 ### 本機啟動
 
 ```bash
 npm install
-npm start
+ADMIN_USERNAME=… ADMIN_PASSWORD=… SESSION_SECRET=… ALLOWED_ORIGINS=http://127.0.0.1:8787,http://localhost:8787 npm start
 # 開 http://127.0.0.1:8787/admin.html 與 freight-logistics.html
 ```

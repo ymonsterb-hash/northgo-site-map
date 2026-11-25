@@ -7,12 +7,12 @@ import { sql } from "./lib/db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
-// Classroom demo defaults; override with Cursor app secrets when publishing.
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "northgo-admin";
-const SESSION_SECRET = process.env.SESSION_SECRET || "northgo-demo-session-change-me";
+// Auth + CORS come only from env / Cursor app secrets (no shipped defaults).
+const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "").trim();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const SESSION_SECRET = process.env.SESSION_SECRET || "";
 const ALLOWED_ORIGINS = new Set(
-  (process.env.ALLOWED_ORIGINS || "https://ymonsterb-hash.github.io,http://127.0.0.1:8787,http://localhost:8787")
+  (process.env.ALLOWED_ORIGINS || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean)
@@ -38,9 +38,13 @@ const MIME = {
 function originAllowed(origin) {
   if (!origin) return true;
   if (ALLOWED_ORIGINS.has(origin)) return true;
-  // GitHub Pages project sites still send origin without the repo path.
-  if (origin === "https://ymonsterb-hash.github.io") return true;
+  // Local browser / smoke tests only (never a production allowlist).
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/u.test(origin)) return true;
   return false;
+}
+
+function authConfigured() {
+  return Boolean(ADMIN_USERNAME && ADMIN_PASSWORD && SESSION_SECRET);
 }
 
 function corsHeaders(req) {
@@ -92,6 +96,7 @@ function safeEqualText(left, right) {
 }
 
 function verifyToken(req) {
+  if (!authConfigured()) return null;
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const [payload, signature, extra] = token.split(".");
@@ -195,6 +200,9 @@ async function publicCreate(req, res) {
 }
 
 async function adminLogin(req, res) {
+  if (!authConfigured()) {
+    return sendJson(req, res, { error: "管理登入尚未設定，請綁定 ADMIN_USERNAME / ADMIN_PASSWORD / SESSION_SECRET。" }, 503);
+  }
   const body = await readJson(req);
   if (!body || typeof body.username !== "string" || typeof body.password !== "string") {
     return sendJson(req, res, { error: "請輸入帳號與密碼。" }, 400);
