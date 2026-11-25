@@ -298,27 +298,47 @@ async function updateInquiry(req, res, id) {
   return sendJson(req, res, { ok: true });
 }
 
+const STATIC_ROOTS = [
+  __dirname,
+  process.cwd(),
+  path.resolve(process.cwd(), "northgo-site-map"),
+  path.resolve(__dirname, "..")
+];
+
+async function readStaticFile(relative) {
+  for (const root of STATIC_ROOTS) {
+    const resolvedRoot = path.resolve(root);
+    const filePath = path.resolve(resolvedRoot, relative);
+    const rel = path.relative(resolvedRoot, filePath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    try {
+      return { data: await readFile(filePath), filePath };
+    } catch {
+      // try next root
+    }
+  }
+  return null;
+}
+
 async function serveStatic(req, res, pathname) {
   let relative = pathname === "/" ? "/index.html" : pathname;
   relative = decodeURIComponent(relative).replace(/^\/+/u, "");
-  if (relative.includes("..") || path.isAbsolute(relative)) {
+  if (!relative || relative.includes("..") || path.isAbsolute(relative)) {
     res.writeHead(400, corsHeaders(req));
     return res.end("Bad path");
   }
-  const filePath = path.join(__dirname, relative);
-  try {
-    const data = await readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
-      ...corsHeaders(req),
-      "Content-Type": MIME[ext] || "application/octet-stream",
-      "Cache-Control": ext === ".html" || ext === ".js" ? "no-store" : "public, max-age=3600"
-    });
-    res.end(data);
-  } catch {
+  const found = await readStaticFile(relative);
+  if (!found) {
     res.writeHead(404, { ...corsHeaders(req), "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Not found");
+    return res.end("Not found");
   }
+  const ext = path.extname(found.filePath).toLowerCase();
+  res.writeHead(200, {
+    ...corsHeaders(req),
+    "Content-Type": MIME[ext] || "application/octet-stream",
+    "Cache-Control": ext === ".html" || ext === ".js" ? "no-store" : "public, max-age=3600"
+  });
+  res.end(found.data);
 }
 
 async function handleApi(req, res, url) {
