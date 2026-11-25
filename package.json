@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
-    "build": "node scripts/migrate.mjs",
+    "embed-admin": "node scripts/embed-admin.mjs",
+    "build": "node scripts/embed-admin.mjs && node scripts/migrate.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "engines": {

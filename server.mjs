@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "./lib/db.mjs";
+import adminHtml from "./lib/admin-html.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -318,7 +319,32 @@ async function readStaticFile(relative) {
   return null;
 }
 
+function sendHtml(req, res, html) {
+  const body = Buffer.from(html, "utf8");
+  res.writeHead(200, {
+    ...corsHeaders(req),
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Content-Length": body.byteLength
+  });
+  res.end(body);
+}
+
 async function serveStatic(req, res, pathname) {
+  // Bundled admin page — survives Cursor hosts that omit loose HTML files.
+  if (pathname === "/admin.html" || pathname === "/admin") {
+    return sendHtml(req, res, adminHtml);
+  }
+  if (pathname === "/api-config.js") {
+    const body = Buffer.from('window.NORTHGO_API_BASE="";\n', "utf8");
+    res.writeHead(200, {
+      ...corsHeaders(req),
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": body.byteLength
+    });
+    return res.end(body);
+  }
   let relative = pathname === "/" ? "/index.html" : pathname;
   relative = decodeURIComponent(relative).replace(/^\/+/u, "");
   if (!relative || relative.includes("..") || path.isAbsolute(relative)) {
