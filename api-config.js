@@ -1,4 +1,4 @@
-// Inquiry API base URL.
-// - GitHub Pages: Cloudflare Worker (redeploy with wrangler.jsonc demo vars for admin login)
-// - `npm start` / Cursor-hosted app: leave blank to use same origin
-window.NORTHGO_API_BASE = "https://northgo-inquiry-crud.ymonsterb.workers.dev";
+// Inquiry API base URL for GitHub Pages (admin + freight form).
+// Cursor-hosted Node API + Postgres (publish-app). Leave blank when browsing
+// the same Cursor app origin (admin.html falls back to location.origin).
+window.NORTHGO_API_BASE = "https://northgo-inquiry.apps.grok.bot";
