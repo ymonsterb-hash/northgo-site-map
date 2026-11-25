@@ -1,4 +1,6 @@
-// Inquiry API base URL for GitHub Pages (admin + freight form).
-// Cursor-hosted Node API + Postgres (publish-app). Leave blank when browsing
-// the same Cursor app origin (admin.html falls back to location.origin).
-window.NORTHGO_API_BASE = "https://northgo-inquiry.apps.grok.bot";
+// Default: same-origin (Cursor-hosted app / local npm start).
+// GitHub Pages is static, so only that host sets the published API origin.
+window.NORTHGO_API_BASE = "";
+if (typeof location !== "undefined" && location.hostname === "ymonsterb-hash.github.io") {
+  window.NORTHGO_API_BASE = "https://northgo-inquiry.apps.grok.bot";
+}
