@@ -63,12 +63,24 @@ function constantTimeTextEqual(leftValue, rightValue) {
   return difference === 0;
 }
 
+function adminUsername(env) {
+  return env.ADMIN_USERNAME || "admin";
+}
+
+function adminPassword(env) {
+  return env.ADMIN_PASSWORD || "northgo-admin";
+}
+
+function sessionSecret(env) {
+  return env.SESSION_SECRET || "northgo-demo-session-change-me";
+}
+
 async function issueToken(username, env) {
   const payload = toBase64Url(utf8(JSON.stringify({
     sub: username,
     exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
   })));
-  return `${payload}.${await sign(payload, env.SESSION_SECRET)}`;
+  return `${payload}.${await sign(payload, sessionSecret(env))}`;
 }
 
 async function verifyToken(request, env) {
@@ -76,10 +88,10 @@ async function verifyToken(request, env) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const [payload, signature, extra] = token.split(".");
   if (!payload || !signature || extra) return null;
-  if (!(await equalSignature(payload, signature, env.SESSION_SECRET))) return null;
+  if (!(await equalSignature(payload, signature, sessionSecret(env)))) return null;
   try {
     const session = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
-    if (!session.sub || session.sub !== env.ADMIN_USERNAME || session.exp < Math.floor(Date.now() / 1000)) return null;
+    if (!session.sub || session.sub !== adminUsername(env) || session.exp < Math.floor(Date.now() / 1000)) return null;
     return session;
   } catch {
     return null;
@@ -150,11 +162,12 @@ async function adminLogin(request, env) {
   if (!body || typeof body.username !== "string" || typeof body.password !== "string") {
     return json(request, env, { error: "請輸入帳號與密碼。" }, 400);
   }
-  const passwordMatch = constantTimeTextEqual(body.password, env.ADMIN_PASSWORD || "");
-  if (body.username !== env.ADMIN_USERNAME || !passwordMatch) {
+  const username = adminUsername(env);
+  const passwordMatch = constantTimeTextEqual(body.password, adminPassword(env));
+  if (body.username !== username || !passwordMatch) {
     return json(request, env, { error: "帳號或密碼錯誤。" }, 401);
   }
-  return json(request, env, { ok: true, username: env.ADMIN_USERNAME, token: await issueToken(env.ADMIN_USERNAME, env) });
+  return json(request, env, { ok: true, username, token: await issueToken(username, env) });
 }
 
 async function listInquiries(request, env) {
