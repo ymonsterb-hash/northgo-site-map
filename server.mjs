@@ -300,9 +300,7 @@ async function updateInquiry(req, res, id) {
 
 const STATIC_ROOTS = [
   __dirname,
-  process.cwd(),
-  path.resolve(process.cwd(), "northgo-site-map"),
-  path.resolve(__dirname, "..")
+  process.cwd()
 ];
 
 async function readStaticFile(relative) {
