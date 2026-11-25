@@ -7,6 +7,7 @@ import { sql } from "./lib/db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
+// Classroom demo defaults; override with Cursor app secrets when publishing.
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "northgo-admin";
 const SESSION_SECRET = process.env.SESSION_SECRET || "northgo-demo-session-change-me";
@@ -34,6 +35,14 @@ const MIME = {
   ".txt": "text/plain; charset=utf-8"
 };
 
+function originAllowed(origin) {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  // GitHub Pages project sites still send origin without the repo path.
+  if (origin === "https://ymonsterb-hash.github.io") return true;
+  return false;
+}
+
 function corsHeaders(req) {
   const origin = req.headers.origin || "";
   const headers = {
@@ -43,7 +52,7 @@ function corsHeaders(req) {
     "Access-Control-Max-Age": "86400",
     "Cache-Control": "no-store"
   };
-  if (!origin || ALLOWED_ORIGINS.has(origin)) {
+  if (originAllowed(origin)) {
     headers["Access-Control-Allow-Origin"] = origin || "*";
   }
   return headers;

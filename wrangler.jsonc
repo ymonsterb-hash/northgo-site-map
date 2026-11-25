@@ -4,12 +4,9 @@
   "main": "worker.js",
   "compatibility_date": "2026-11-18",
   "workers_dev": true,
-  "vars": {
-    "ALLOWED_ORIGIN": "https://ymonsterb-hash.github.io",
-    "ADMIN_USERNAME": "admin",
-    "ADMIN_PASSWORD": "northgo-admin",
-    "SESSION_SECRET": "northgo-demo-session-change-me"
-  },
+  // Demo credentials are NOT shipped here (publish-app security). Set via
+  // `wrangler secret put` / dashboard: ADMIN_USERNAME, ADMIN_PASSWORD, SESSION_SECRET,
+  // and ALLOWED_ORIGIN=https://ymonsterb-hash.github.io
   "d1_databases": [
     {
       "binding": "DB",

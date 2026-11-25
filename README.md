@@ -36,18 +36,16 @@
 
 ### 登入（課堂示範）
 
-- 管理後台：https://ymonsterb-hash.github.io/northgo-site-map/admin.html
+- 管理後台（GitHub Pages）：https://ymonsterb-hash.github.io/northgo-site-map/admin.html
 - 帳號：`admin`
 - 密碼：`northgo-admin`
+- API base：見 `api-config.js`（CORS 允許 `https://ymonsterb-hash.github.io`）
 
 ### 資料怎麼存
 
-兩種可並存的後端（同一組 API 路徑）：
-
-1. **Cloudflare Worker + D1**（GitHub Pages 預設）：`worker.js`、`schema.sql`、`wrangler.jsonc`、`api-config.js`  
-   在本機對已綁定的帳號執行一次：`npx wrangler deploy`（`wrangler.jsonc` 已含示範帳密 vars）。
-2. **Node API + Postgres**（本機／Cursor 託管）：`server.mjs`、`migrations/`、`npm start`  
-   本機用 PGlite；Cursor 發布時依 `cursor-app.json` 使用 Postgres。
+1. **預設（耐久、免 wrangler）**：**Cursor publish-app** + Postgres（`cursor-app.json`、`server.mjs`、`migrations/`）。發布時選 **Public**。`api-config.js` 指向該公開 app 網址；也可直接開 Cursor app 上的 `/admin.html`（同網域 API）。
+2. **本機**：`npm install && npm start` → http://127.0.0.1:8787 （PGlite；課堂帳密可用）。
+3. **可選／舊版**：Cloudflare Worker + D1（`worker.js`）。需自行設定 Worker secrets；本作業不再依賴 Brenda 執行 wrangler。
 
 ### 本機啟動
 
