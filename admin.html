@@ -22,7 +22,10 @@
   <script src="api-config.js?v=20261126d1"></script>
   <script>
     (()=>{
-      const API_BASE=(window.NORTHGO_API_BASE||location.origin).replace(/\/$/u,'');
+      // Hardcode Pages → Cloudflare Worker+D1 so cached api-config.js cannot break login.
+      const API_BASE=(location.hostname==='ymonsterb-hash.github.io'
+        ? 'https://northgo-inquiry-crud.alive-sousaphone.workers.dev'
+        : (window.NORTHGO_API_BASE||location.origin)).replace(/\/$/u,'');
       const tokenKey='northgo.admin.token';
       const loginScreen=document.querySelector('#login-screen'), app=document.querySelector('#app'), loginForm=document.querySelector('#login-form'), loginError=document.querySelector('#login-error'), rows=document.querySelector('#rows'), empty=document.querySelector('#empty'), notice=document.querySelector('#notice'), modal=document.querySelector('#modal'), form=document.querySelector('#inquiry-form');
       let token=sessionStorage.getItem(tokenKey)||'',editingId=null,allItems=[];
