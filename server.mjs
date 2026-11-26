@@ -22,6 +22,18 @@ const SESSION_TTL_SECONDS = 8 * 60 * 60;
 const MAX_BODY_BYTES = 20_000;
 const ALLOWED_STATUSES = new Set(["new", "in_progress", "completed", "archived"]);
 
+// Only these paths are served as static files (backend source/schema stay private).
+const STATIC_ALLOWLIST = new Set([
+  "/",
+  "/index.html",
+  "/admin.html",
+  "/admin",
+  "/api-config.js",
+  "/freight-logistics.html",
+  "/freight-hero.png",
+  "/VERSION"
+]);
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -31,17 +43,38 @@ const MIME = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
-  ".json": "application/json; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
   ".txt": "text/plain; charset=utf-8"
 };
 
-function originAllowed(origin) {
-  if (!origin) return true;
-  if (ALLOWED_ORIGINS.has(origin)) return true;
-  // Local browser / smoke tests only (never a production allowlist).
-  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/u.test(origin)) return true;
+/** In-memory sliding-window rate limiter (per client key). */
+const rateBuckets = new Map();
+
+function clientKey(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.socket?.remoteAddress || "unknown";
+}
+
+function rateLimited(bucket, key, limit, windowMs) {
+  const now = Date.now();
+  const mapKey = `${bucket}:${key}`;
+  let stamps = rateBuckets.get(mapKey);
+  if (!stamps) {
+    stamps = [];
+    rateBuckets.set(mapKey, stamps);
+  }
+  const cutoff = now - windowMs;
+  while (stamps.length && stamps[0] < cutoff) stamps.shift();
+  if (stamps.length >= limit) return true;
+  stamps.push(now);
   return false;
+}
+
+function originAllowed(origin) {
+  if (!origin) return false;
+  return ALLOWED_ORIGINS.has(origin);
 }
 
 function authConfigured() {
@@ -57,8 +90,9 @@ function corsHeaders(req) {
     "Access-Control-Max-Age": "86400",
     "Cache-Control": "no-store"
   };
-  if (originAllowed(origin)) {
-    headers["Access-Control-Allow-Origin"] = origin || "*";
+  // Only reflect origins listed in ALLOWED_ORIGINS (no * / no implicit localhost).
+  if (origin && originAllowed(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
   }
   return headers;
 }
@@ -331,11 +365,28 @@ function sendHtml(req, res, html) {
 }
 
 async function serveStatic(req, res, pathname) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    res.writeHead(400, { ...corsHeaders(req), "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("Bad path");
+  }
+  if (decoded.includes("\0") || decoded.includes("..")) {
+    res.writeHead(400, { ...corsHeaders(req), "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("Bad path");
+  }
+  // Strict allowlist — never serve server source, migrations, package manifests, etc.
+  if (!STATIC_ALLOWLIST.has(decoded)) {
+    res.writeHead(404, { ...corsHeaders(req), "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("Not found");
+  }
   // Bundled admin page — survives Cursor hosts that omit loose HTML files.
-  if (pathname === "/admin.html" || pathname === "/admin") {
+  if (decoded === "/admin.html" || decoded === "/admin") {
     return sendHtml(req, res, adminHtml);
   }
-  if (pathname === "/api-config.js") {
+  if (decoded === "/api-config.js") {
+    // Same-origin only on the hosted app — never hardcode an external API host.
     const body = Buffer.from('window.NORTHGO_API_BASE="";\n', "utf8");
     res.writeHead(200, {
       ...corsHeaders(req),
@@ -345,12 +396,7 @@ async function serveStatic(req, res, pathname) {
     });
     return res.end(body);
   }
-  let relative = pathname === "/" ? "/index.html" : pathname;
-  relative = decodeURIComponent(relative).replace(/^\/+/u, "");
-  if (!relative || relative.includes("..") || path.isAbsolute(relative)) {
-    res.writeHead(400, corsHeaders(req));
-    return res.end("Bad path");
-  }
+  const relative = (decoded === "/" ? "/index.html" : decoded).replace(/^\/+/u, "");
   const found = await readStaticFile(relative);
   if (!found) {
     res.writeHead(404, { ...corsHeaders(req), "Content-Type": "text/plain; charset=utf-8" });
@@ -377,6 +423,11 @@ async function handleApi(req, res, url) {
   }
   if (!pathname.startsWith("/api/")) return false;
   if (pathname === "/api/inquiries/public" && req.method === "POST") {
+    // 20 public writes / 15 minutes per client IP.
+    if (rateLimited("public-create", clientKey(req), 20, 15 * 60 * 1000)) {
+      sendJson(req, res, { error: "送出太頻繁，請稍後再試。" }, 429);
+      return true;
+    }
     try {
       await publicCreate(req, res);
     } catch {
@@ -385,6 +436,11 @@ async function handleApi(req, res, url) {
     return true;
   }
   if (pathname === "/api/login" && req.method === "POST") {
+    // 10 login attempts / 15 minutes per client IP.
+    if (rateLimited("login", clientKey(req), 10, 15 * 60 * 1000)) {
+      sendJson(req, res, { error: "嘗試次數過多，請稍後再試。" }, 429);
+      return true;
+    }
     await adminLogin(req, res);
     return true;
   }
