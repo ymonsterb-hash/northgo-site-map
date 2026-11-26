@@ -310,6 +310,21 @@ export default {
     const path = url.pathname;
     const cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    // Root is API-only — show a short status page instead of plain "Not found".
+    if ((path === "/" || path === "") && request.method === "GET") {
+      const body = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>NorthGo Inquiry API</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;margin:2rem;color:#13264b}code{background:#f4f7fa;padding:.1em .35em}</style></head>
+<body><h1>NorthGo Inquiry API</h1>
+<p>Cloudflare Worker + D1 已上線。</p>
+<ul>
+<li>管理後台：<a href="https://ymonsterb-hash.github.io/northgo-site-map/admin.html">GitHub Pages admin</a></li>
+<li>登入 API：<code>POST /api/login</code></li>
+<li>公開詢問：<code>POST /api/inquiries/public</code></li>
+</ul></body></html>`;
+      const headers = corsHeaders(request, env);
+      headers.set("Content-Type", "text/html; charset=utf-8");
+      return new Response(body, { status: 200, headers });
+    }
     if (!path.startsWith("/api/") && path !== "/health") return new Response("Not found", { status: 404 });
     if (!env.DB && path !== "/api/login" && path !== "/api/logout") {
       return json(request, env, { error: "D1 尚未設定。" }, 503);
