@@ -4,14 +4,15 @@
   "main": "worker.js",
   "compatibility_date": "2026-11-18",
   "workers_dev": true,
-  // Demo credentials are NOT shipped here (publish-app security). Set via
-  // `wrangler secret put` / dashboard: ADMIN_USERNAME, ADMIN_PASSWORD, SESSION_SECRET,
-  // and ALLOWED_ORIGIN=https://ymonsterb-hash.github.io
+  // Set via `wrangler secret put` (do not commit values):
+  // ADMIN_USERNAME, ADMIN_PASSWORD, SESSION_SECRET,
+  // ALLOWED_ORIGIN=https://ymonsterb-hash.github.io
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "northgo-inquiries",
-      "database_id": "b7649afb-7ca4-455b-a0e7-3413990f4848"
+      "database_id": "b7649afb-7ca4-455b-a0e7-3413990f4848",
+      "migrations_dir": "d1/migrations"
     }
   ]
 }
