@@ -1,6 +1,8 @@
 const ALLOWED_STATUSES = new Set(["new", "in_progress", "completed", "archived"]);
+const ALLOWED_ROLES = new Set(["owner", "editor"]);
 const MAX_BODY_BYTES = 20_000;
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
+const PBKDF2_ITERATIONS = 100_000;
 
 /** Best-effort per-isolate rate buckets (not shared across isolates). */
 const rateBuckets = new Map();
@@ -8,7 +10,6 @@ const rateBuckets = new Map();
 const revokedTokenSigs = new Map();
 
 function clientKey(request) {
-  // Prefer platform-set CF-Connecting-IP; never trust spoofable X-Forwarded-For.
   return request.headers.get("CF-Connecting-IP") || "unknown";
 }
 
@@ -125,19 +126,120 @@ function sessionSecret(env) {
 }
 
 function authConfigured(env) {
-  return Boolean(adminUsername(env) && adminPassword(env) && sessionSecret(env));
+  return Boolean(sessionSecret(env));
 }
 
-async function issueToken(username, env) {
+async function derivePasswordBits(password, salt, iterations) {
+  const keyMaterial = await crypto.subtle.importKey("raw", utf8(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations },
+    keyMaterial,
+    256
+  );
+  return new Uint8Array(bits);
+}
+
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const derived = await derivePasswordBits(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${toBase64Url(salt)}$${toBase64Url(derived)}`;
+}
+
+async function verifyPassword(password, stored) {
+  if (typeof stored !== "string" || !stored.startsWith("pbkdf2$")) {
+    return constantTimeTextEqual(password, String(stored || ""));
+  }
+  const parts = stored.split("$");
+  if (parts.length !== 4) return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isFinite(iterations) || iterations < 10_000) return false;
+  const salt = fromBase64Url(parts[2]);
+  const expected = fromBase64Url(parts[3]);
+  const actual = await derivePasswordBits(password, salt, iterations);
+  if (actual.length !== expected.length) return false;
+  let difference = 0;
+  for (let i = 0; i < actual.length; i++) difference |= actual[i] ^ expected[i];
+  return difference === 0;
+}
+
+function publicUser(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    username: row.username,
+    display_name: row.display_name || row.username,
+    role: row.role,
+    disabled: Boolean(Number(row.disabled)),
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+
+async function ensureAdminUsersSchema(env) {
+  if (!env.DB || ensureAdminUsersSchema.ready) return;
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'editor')),
+      disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+  `).run();
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role)"
+  ).run();
+  ensureAdminUsersSchema.ready = true;
+}
+
+async function ensureBootstrapOwner(env) {
+  if (!env.DB) return null;
+  await ensureAdminUsersSchema(env);
+  const count = await env.DB.prepare("SELECT COUNT(*) AS total FROM admin_users").first();
+  if (Number(count?.total || 0) > 0) return null;
+  const username = adminUsername(env);
+  const password = adminPassword(env);
+  if (!username || !password) return null;
+  const passwordHash = await hashPassword(password);
+  const result = await env.DB.prepare(
+    `INSERT INTO admin_users (username, password_hash, display_name, role)
+     VALUES (?, ?, ?, 'owner')`
+  ).bind(username, passwordHash, username).run();
+  return {
+    id: result.meta.last_row_id,
+    username,
+    display_name: username,
+    role: "owner",
+    disabled: 0
+  };
+}
+
+async function findUserByUsername(env, username) {
+  return env.DB.prepare(
+    "SELECT * FROM admin_users WHERE username = ? COLLATE NOCASE LIMIT 1"
+  ).bind(String(username || "").trim()).first();
+}
+
+async function findUserById(env, id) {
+  return env.DB.prepare("SELECT * FROM admin_users WHERE id = ?").bind(id).first();
+}
+
+async function issueToken(user, env) {
   const payload = toBase64Url(utf8(JSON.stringify({
-    sub: username,
+    sub: user.username,
+    uid: Number(user.id),
+    role: user.role,
     exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
   })));
   return `${payload}.${await sign(payload, sessionSecret(env))}`;
 }
 
 async function verifyToken(request, env) {
-  if (!authConfigured(env)) return null;
+  if (!authConfigured(env) || !env.DB) return null;
+  await ensureAdminUsersSchema(env);
   const header = request.headers.get("Authorization") || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const [payload, signature, extra] = token.split(".");
@@ -147,8 +249,17 @@ async function verifyToken(request, env) {
   if (revokedTokenSigs.has(signature)) return null;
   try {
     const session = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
-    if (!session.sub || session.sub !== adminUsername(env) || session.exp < Math.floor(Date.now() / 1000)) return null;
-    return session;
+    if (!session.sub || !session.uid || session.exp < Math.floor(Date.now() / 1000)) return null;
+    const user = await findUserById(env, Number(session.uid));
+    if (!user || Number(user.disabled)) return null;
+    if (String(user.username).toLowerCase() !== String(session.sub).toLowerCase()) return null;
+    return {
+      sub: user.username,
+      uid: Number(user.id),
+      role: user.role,
+      display_name: user.display_name || user.username,
+      exp: session.exp
+    };
   } catch {
     return null;
   }
@@ -197,6 +308,11 @@ function routeId(pathname) {
   return match ? Number(match[1]) : null;
 }
 
+function routeUserId(pathname) {
+  const match = pathname.match(/^\/api\/users\/(\d+)$/u);
+  return match ? Number(match[1]) : null;
+}
+
 async function publicCreate(request, env) {
   const body = await readJson(request);
   if (!body) return json(request, env, { error: "請提供有效的 JSON 詢問資料。" }, 400);
@@ -214,19 +330,26 @@ async function publicCreate(request, env) {
 }
 
 async function adminLogin(request, env) {
-  if (!authConfigured(env)) {
-    return json(request, env, { error: "管理登入尚未設定，請設定 Worker secrets。" }, 503);
+  if (!authConfigured(env) || !env.DB) {
+    return json(request, env, { error: "管理登入尚未設定，請設定 Worker secrets 與 D1。" }, 503);
   }
+  await ensureBootstrapOwner(env);
   const body = await readJson(request);
   if (!body || typeof body.username !== "string" || typeof body.password !== "string") {
     return json(request, env, { error: "請輸入帳號與密碼。" }, 400);
   }
-  const username = adminUsername(env);
-  const passwordMatch = constantTimeTextEqual(body.password, adminPassword(env));
-  if (body.username !== username || !passwordMatch) {
+  const username = body.username.trim();
+  const user = await findUserByUsername(env, username);
+  if (!user || Number(user.disabled) || !(await verifyPassword(body.password, user.password_hash))) {
     return json(request, env, { error: "帳號或密碼錯誤。" }, 401);
   }
-  return json(request, env, { ok: true, username, token: await issueToken(username, env) });
+  return json(request, env, {
+    ok: true,
+    username: user.username,
+    display_name: user.display_name || user.username,
+    role: user.role,
+    token: await issueToken(user, env)
+  });
 }
 
 async function listInquiries(request, env) {
@@ -304,21 +427,173 @@ async function updateInquiry(request, env, id) {
   return json(request, env, { ok: true });
 }
 
+async function listUsers(request, env, session) {
+  const url = new URL(request.url);
+  const search = (url.searchParams.get("q") || "").trim().slice(0, 80);
+  let rows;
+  if (search) {
+    const term = `%${search.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    rows = await env.DB.prepare(
+      `SELECT id, username, display_name, role, disabled, created_at, updated_at
+       FROM admin_users
+       WHERE username LIKE ? OR display_name LIKE ?
+       ORDER BY role ASC, username ASC`
+    ).bind(term, term).all();
+  } else {
+    rows = await env.DB.prepare(
+      `SELECT id, username, display_name, role, disabled, created_at, updated_at
+       FROM admin_users ORDER BY role ASC, username ASC`
+    ).all();
+  }
+  const items = (rows.results || []).map(publicUser);
+  return json(request, env, {
+    items,
+    me: {
+      id: session.uid,
+      username: session.sub,
+      display_name: session.display_name,
+      role: session.role
+    },
+    counts: {
+      total: items.length,
+      owners: items.filter((item) => item.role === "owner").length,
+      editors: items.filter((item) => item.role === "editor").length,
+      disabled: items.filter((item) => item.disabled).length
+    }
+  });
+}
+
+async function createUser(request, env, session) {
+  if (session.role !== "owner") {
+    return json(request, env, { error: "僅擁有者可新增成員。" }, 403);
+  }
+  const body = await readJson(request);
+  if (!body) return json(request, env, { error: "請提供有效的 JSON 資料。" }, 400);
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const displayName = typeof body.display_name === "string" ? body.display_name.trim().slice(0, 80) : username;
+  const role = body.role === "owner" ? "owner" : "editor";
+  if (!/^[A-Za-z0-9._-]{3,40}$/u.test(username)) {
+    return json(request, env, { error: "帳號需為 3–40 字元，僅英數、點、底線或連字號。" }, 400);
+  }
+  if (password.length < 8 || password.length > 120) {
+    return json(request, env, { error: "密碼長度需為 8–120 字元。" }, 400);
+  }
+  if (!ALLOWED_ROLES.has(role)) {
+    return json(request, env, { error: "角色不正確。" }, 400);
+  }
+  const existing = await findUserByUsername(env, username);
+  if (existing) return json(request, env, { error: "此帳號已存在。" }, 409);
+  const passwordHash = await hashPassword(password);
+  const result = await env.DB.prepare(
+    `INSERT INTO admin_users (username, password_hash, display_name, role)
+     VALUES (?, ?, ?, ?)`
+  ).bind(username, passwordHash, displayName || username, role).run();
+  const created = await findUserById(env, result.meta.last_row_id);
+  return json(request, env, { ok: true, user: publicUser(created) }, 201);
+}
+
+async function updateUser(request, env, session, id) {
+  const body = await readJson(request);
+  if (!body) return json(request, env, { error: "請提供有效的 JSON 資料。" }, 400);
+  const target = await findUserById(env, id);
+  if (!target) return json(request, env, { error: "找不到此帳號。" }, 404);
+  const isSelf = Number(session.uid) === Number(id);
+  const isOwner = session.role === "owner";
+  if (!isOwner && !isSelf) {
+    return json(request, env, { error: "權限不足。" }, 403);
+  }
+
+  let displayName = target.display_name;
+  let role = target.role;
+  let disabled = Number(target.disabled);
+  let passwordHash = target.password_hash;
+
+  if (typeof body.display_name === "string") {
+    displayName = body.display_name.trim().slice(0, 80) || target.username;
+  }
+  if (typeof body.password === "string" && body.password.length) {
+    if (body.password.length < 8 || body.password.length > 120) {
+      return json(request, env, { error: "密碼長度需為 8–120 字元。" }, 400);
+    }
+    passwordHash = await hashPassword(body.password);
+  }
+  if (body.role !== undefined) {
+    if (!isOwner) return json(request, env, { error: "僅擁有者可變更角色。" }, 403);
+    if (!ALLOWED_ROLES.has(body.role)) return json(request, env, { error: "角色不正確。" }, 400);
+    if (isSelf && body.role !== "owner") {
+      const owners = await env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM admin_users WHERE role = 'owner' AND disabled = 0"
+      ).first();
+      if (Number(owners?.total || 0) <= 1) {
+        return json(request, env, { error: "至少需保留一位啟用中的擁有者。" }, 400);
+      }
+    }
+    role = body.role;
+  }
+  if (body.disabled !== undefined) {
+    if (!isOwner) return json(request, env, { error: "僅擁有者可停用帳號。" }, 403);
+    disabled = body.disabled ? 1 : 0;
+    if (isSelf && disabled) {
+      return json(request, env, { error: "無法停用自己的帳號。" }, 400);
+    }
+    if (target.role === "owner" && disabled) {
+      const owners = await env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM admin_users WHERE role = 'owner' AND disabled = 0 AND id != ?"
+      ).bind(id).first();
+      if (Number(owners?.total || 0) < 1) {
+        return json(request, env, { error: "至少需保留一位啟用中的擁有者。" }, 400);
+      }
+    }
+  }
+
+  await env.DB.prepare(
+    `UPDATE admin_users
+     SET display_name = ?, role = ?, disabled = ?, password_hash = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`
+  ).bind(displayName, role, disabled, passwordHash, id).run();
+  const updated = await findUserById(env, id);
+  return json(request, env, { ok: true, user: publicUser(updated) });
+}
+
+async function deleteUser(request, env, session, id) {
+  if (session.role !== "owner") {
+    return json(request, env, { error: "僅擁有者可刪除成員。" }, 403);
+  }
+  if (Number(session.uid) === Number(id)) {
+    return json(request, env, { error: "無法刪除自己的帳號。" }, 400);
+  }
+  const target = await findUserById(env, id);
+  if (!target) return json(request, env, { error: "找不到此帳號。" }, 404);
+  if (target.role === "owner") {
+    const owners = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM admin_users WHERE role = 'owner' AND disabled = 0 AND id != ?"
+    ).bind(id).first();
+    if (Number(owners?.total || 0) < 1) {
+      return json(request, env, { error: "至少需保留一位啟用中的擁有者。" }, 400);
+    }
+  }
+  const result = await env.DB.prepare("DELETE FROM admin_users WHERE id = ?").bind(id).run();
+  if (!result.meta.changes) return json(request, env, { error: "找不到此帳號。" }, 404);
+  return json(request, env, { ok: true });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
     const cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    // Root is API-only — show a short status page instead of plain "Not found".
     if ((path === "/" || path === "") && request.method === "GET") {
       const body = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>NorthGo Inquiry API</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;margin:2rem;color:#13264b}code{background:#f4f7fa;padding:.1em .35em}</style></head>
 <body><h1>NorthGo Inquiry API</h1>
-<p>Cloudflare Worker + D1 已上線。</p>
+<p>Cloudflare Worker + D1 已上線（支援多人後台帳號）。</p>
 <ul>
 <li>管理後台：<a href="https://ymonsterb-hash.github.io/northgo-site-map/admin.html">GitHub Pages admin</a></li>
 <li>登入 API：<code>POST /api/login</code></li>
+<li>帳號管理：<code>/api/users</code></li>
 <li>公開詢問：<code>POST /api/inquiries/public</code></li>
 </ul></body></html>`;
       const headers = corsHeaders(request, env);
@@ -348,10 +623,35 @@ export default {
       try { await env.DB.prepare("SELECT 1").first(); return json(request, env, { ok: true, database: "connected" }); }
       catch { return json(request, env, { ok: false, database: "unavailable" }, 503); }
     }
-    if (path === "/api/me" && request.method === "GET") return json(request, env, { ok: true, username: session.sub });
+    if (path === "/api/me" && request.method === "GET") {
+      return json(request, env, {
+        ok: true,
+        username: session.sub,
+        display_name: session.display_name,
+        role: session.role,
+        id: session.uid
+      });
+    }
     if (path === "/api/logout" && request.method === "POST") {
       revokeBearer(request);
       return json(request, env, { ok: true });
+    }
+    if (path === "/api/users" && request.method === "GET") {
+      try { return await listUsers(request, env, session); }
+      catch { return json(request, env, { error: "讀取帳號列表失敗。" }, 500); }
+    }
+    if (path === "/api/users" && request.method === "POST") {
+      try { return await createUser(request, env, session); }
+      catch { return json(request, env, { error: "新增帳號失敗。" }, 500); }
+    }
+    const userId = routeUserId(path);
+    if (userId && request.method === "PATCH") {
+      try { return await updateUser(request, env, session, userId); }
+      catch { return json(request, env, { error: "更新帳號失敗。" }, 500); }
+    }
+    if (userId && request.method === "DELETE") {
+      try { return await deleteUser(request, env, session, userId); }
+      catch { return json(request, env, { error: "刪除帳號失敗。" }, 500); }
     }
     if (path === "/api/inquiries" && request.method === "GET") {
       try { return await listInquiries(request, env); }
