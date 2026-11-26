@@ -2,6 +2,52 @@ const ALLOWED_STATUSES = new Set(["new", "in_progress", "completed", "archived"]
 const MAX_BODY_BYTES = 20_000;
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
+/** Best-effort per-isolate rate buckets (not shared across isolates). */
+const rateBuckets = new Map();
+/** Revoked bearer signatures → expiry unix seconds. */
+const revokedTokenSigs = new Map();
+
+function clientKey(request) {
+  // Prefer platform-set CF-Connecting-IP; never trust spoofable X-Forwarded-For.
+  return request.headers.get("CF-Connecting-IP") || "unknown";
+}
+
+function rateLimited(bucket, key, limit, windowMs) {
+  const now = Date.now();
+  const mapKey = `${bucket}:${key}`;
+  let stamps = rateBuckets.get(mapKey);
+  if (!stamps) {
+    stamps = [];
+    rateBuckets.set(mapKey, stamps);
+  }
+  const cutoff = now - windowMs;
+  while (stamps.length && stamps[0] < cutoff) stamps.shift();
+  if (stamps.length >= limit) return true;
+  stamps.push(now);
+  return false;
+}
+
+function pruneRevokedTokens(nowSec = Math.floor(Date.now() / 1000)) {
+  for (const [sig, exp] of revokedTokenSigs) {
+    if (exp <= nowSec) revokedTokenSigs.delete(sig);
+  }
+}
+
+function revokeBearer(request) {
+  const header = request.headers.get("Authorization") || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return;
+  try {
+    const session = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
+    const exp = Number(session.exp) || Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
+    revokedTokenSigs.set(signature, exp);
+    pruneRevokedTokens();
+  } catch {
+    revokedTokenSigs.set(signature, Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS);
+  }
+}
+
 function corsHeaders(request, env) {
   const origin = request.headers.get("Origin") || "";
   const allowed = String(env.ALLOWED_ORIGIN || env.ALLOWED_ORIGINS || "")
@@ -97,6 +143,8 @@ async function verifyToken(request, env) {
   const [payload, signature, extra] = token.split(".");
   if (!payload || !signature || extra) return null;
   if (!(await equalSignature(payload, signature, sessionSecret(env)))) return null;
+  pruneRevokedTokens();
+  if (revokedTokenSigs.has(signature)) return null;
   try {
     const session = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
     if (!session.sub || session.sub !== adminUsername(env) || session.exp < Math.floor(Date.now() / 1000)) return null;
@@ -262,21 +310,34 @@ export default {
     const path = url.pathname;
     const cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    if (!path.startsWith("/api/") && path !== "/health") return new Response("Not found", { status: 404 });
+    if (!env.DB && path !== "/api/login" && path !== "/api/logout") {
+      return json(request, env, { error: "D1 尚未設定。" }, 503);
+    }
+    if (path === "/api/inquiries/public" && request.method === "POST") {
+      if (rateLimited("public-create", clientKey(request), 20, 15 * 60 * 1000)) {
+        return json(request, env, { error: "送出太頻繁，請稍後再試。" }, 429);
+      }
+      try { return await publicCreate(request, env); }
+      catch { return json(request, env, { error: "儲存詢問時發生錯誤，請稍後再試。" }, 500); }
+    }
+    if (path === "/api/login" && request.method === "POST") {
+      if (rateLimited("login", clientKey(request), 10, 15 * 60 * 1000)) {
+        return json(request, env, { error: "嘗試次數過多，請稍後再試。" }, 429);
+      }
+      return adminLogin(request, env);
+    }
+    const session = await verifyToken(request, env);
+    if (!session) return json(request, env, { error: "登入已逾時，請重新登入。" }, 401);
     if (path === "/health" && request.method === "GET") {
       try { await env.DB.prepare("SELECT 1").first(); return json(request, env, { ok: true, database: "connected" }); }
       catch { return json(request, env, { ok: false, database: "unavailable" }, 503); }
     }
-    if (!path.startsWith("/api/")) return new Response("Not found", { status: 404 });
-    if (!env.DB) return json(request, env, { error: "D1 尚未設定。" }, 503);
-    if (path === "/api/inquiries/public" && request.method === "POST") {
-      try { return await publicCreate(request, env); }
-      catch { return json(request, env, { error: "儲存詢問時發生錯誤，請稍後再試。" }, 500); }
-    }
-    if (path === "/api/login" && request.method === "POST") return adminLogin(request, env);
-    const session = await verifyToken(request, env);
-    if (!session) return json(request, env, { error: "登入已逾時，請重新登入。" }, 401);
     if (path === "/api/me" && request.method === "GET") return json(request, env, { ok: true, username: session.sub });
-    if (path === "/api/logout" && request.method === "POST") return json(request, env, { ok: true });
+    if (path === "/api/logout" && request.method === "POST") {
+      revokeBearer(request);
+      return json(request, env, { ok: true });
+    }
     if (path === "/api/inquiries" && request.method === "GET") {
       try { return await listInquiries(request, env); }
       catch { return json(request, env, { error: "讀取詢問資料失敗。" }, 500); }

@@ -48,12 +48,11 @@ const MIME = {
 
 /** In-memory sliding-window rate limiter (per client key). */
 const rateBuckets = new Map();
+/** Revoked bearer signatures → expiry unix seconds (cleared after exp). */
+const revokedTokenSigs = new Map();
 
 function clientKey(req) {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim()) {
-    return forwarded.split(",")[0].trim();
-  }
+  // Never trust client-supplied X-Forwarded-For (spoofable). Use the TCP peer only.
   return req.socket?.remoteAddress || "unknown";
 }
 
@@ -70,6 +69,27 @@ function rateLimited(bucket, key, limit, windowMs) {
   if (stamps.length >= limit) return true;
   stamps.push(now);
   return false;
+}
+
+function pruneRevokedTokens(nowSec = Math.floor(Date.now() / 1000)) {
+  for (const [sig, exp] of revokedTokenSigs) {
+    if (exp <= nowSec) revokedTokenSigs.delete(sig);
+  }
+}
+
+function revokeBearer(req) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return;
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const exp = Number(session.exp) || Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
+    revokedTokenSigs.set(signature, exp);
+    pruneRevokedTokens();
+  } catch {
+    revokedTokenSigs.set(signature, Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS);
+  }
 }
 
 function originAllowed(origin) {
@@ -137,6 +157,8 @@ function verifyToken(req) {
   const [payload, signature, extra] = token.split(".");
   if (!payload || !signature || extra) return null;
   if (!safeEqualText(sign(payload, SESSION_SECRET), signature)) return null;
+  pruneRevokedTokens();
+  if (revokedTokenSigs.has(signature)) return null;
   try {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!session.sub || session.sub !== ADMIN_USERNAME || session.exp < Math.floor(Date.now() / 1000)) {
@@ -413,17 +435,9 @@ async function serveStatic(req, res, pathname) {
 
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
-  if (pathname === "/health" && req.method === "GET") {
-    try {
-      await sql("SELECT 1 AS ok");
-      return sendJson(req, res, { ok: true, database: "connected" });
-    } catch {
-      return sendJson(req, res, { ok: false, database: "unavailable" }, 503);
-    }
-  }
-  if (!pathname.startsWith("/api/")) return false;
+  if (!pathname.startsWith("/api/") && pathname !== "/health") return false;
   if (pathname === "/api/inquiries/public" && req.method === "POST") {
-    // 20 public writes / 15 minutes per client IP.
+    // 20 public writes / 15 minutes per TCP peer (not X-Forwarded-For).
     if (rateLimited("public-create", clientKey(req), 20, 15 * 60 * 1000)) {
       sendJson(req, res, { error: "送出太頻繁，請稍後再試。" }, 429);
       return true;
@@ -436,7 +450,7 @@ async function handleApi(req, res, url) {
     return true;
   }
   if (pathname === "/api/login" && req.method === "POST") {
-    // 10 login attempts / 15 minutes per client IP.
+    // 10 login attempts / 15 minutes per TCP peer (not X-Forwarded-For).
     if (rateLimited("login", clientKey(req), 10, 15 * 60 * 1000)) {
       sendJson(req, res, { error: "嘗試次數過多，請稍後再試。" }, 429);
       return true;
@@ -449,11 +463,21 @@ async function handleApi(req, res, url) {
     sendJson(req, res, { error: "登入已逾時，請重新登入。" }, 401);
     return true;
   }
+  // /health is admin-only — no anonymous DB status probe.
+  if (pathname === "/health" && req.method === "GET") {
+    try {
+      await sql("SELECT 1 AS ok");
+      return sendJson(req, res, { ok: true, database: "connected" });
+    } catch {
+      return sendJson(req, res, { ok: false, database: "unavailable" }, 503);
+    }
+  }
   if (pathname === "/api/me" && req.method === "GET") {
     sendJson(req, res, { ok: true, username: session.sub });
     return true;
   }
   if (pathname === "/api/logout" && req.method === "POST") {
+    revokeBearer(req);
     sendJson(req, res, { ok: true });
     return true;
   }
