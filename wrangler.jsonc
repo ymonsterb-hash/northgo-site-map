@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "northgo-inquiries",
-      "database_id": "64052cd1-0b21-4481-a4e3-536b2e54c1db",
+      "database_id": "cb388a58-d8d8-4f6b-8a13-00763296b9d8",
       "migrations_dir": "d1/migrations"
     }
   ]

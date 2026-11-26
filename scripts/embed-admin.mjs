@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const html = readFileSync(path.join(root, "admin.html"), "utf8").replace(
-  '<script src="api-config.js"></script>',
+  /<script src="api-config\.js(?:\?[^"]*)?"><\/script>/u,
   '<script>window.NORTHGO_API_BASE="";</script>'
 );
 writeFileSync(

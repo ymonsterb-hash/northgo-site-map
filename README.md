@@ -30,15 +30,18 @@
 
 選項：`minor`／`major`、`--dry-run`、`--no-push`。執行前需設定好 `origin` remote 與 GitHub 登入。
 
-## 客戶詢問管理（v1.2.4）
+## 客戶詢問與多人後台（v1.2.4）
 
-前台貨運物流頁（`freight-logistics.html`）的詢問表單會送到 API；後台 `admin.html`（「客戶詢問」）可完整 CRUD。
+前台貨運物流頁（`freight-logistics.html`）的詢問表單會送到 API；後台 `admin.html` 可：
+
+- **客戶詢問 CRUD**（查看／新增／編輯／刪除、狀態更新）
+- **帳號管理 CRUD**（多人登入；角色 `owner` / `editor`）
 
 ### 登入
 
 - 管理後台（GitHub Pages）：https://ymonsterb-hash.github.io/northgo-site-map/admin.html
 - API base：見 `api-config.js`（功課路徑指向 Cloudflare Worker）
-- 帳密以 Cloudflare Worker secrets 為準（課堂示範帳號見作業說明／教師公告），不寫進原始碼。
+- 首次部署時，Worker secrets 的 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 會自動建立第一位 **owner**；之後可在「帳號管理」新增其他成員。
 
 ### 資料怎麼存（功課路徑）
 
@@ -60,8 +63,8 @@ npx wrangler deploy
 
 `ALLOWED_ORIGIN` 請設為 `https://ymonsterb-hash.github.io`。
 
-3. 部署成功後 Worker：`https://northgo-inquiry-crud.ymonsterb.workers.dev`  
-4. `api-config.js` 已指向上述網址；合併到 `main` 後 GitHub Pages 會自動更新。
+3. 部署成功後 Worker 例：`https://northgo-inquiry-crud.<account>.workers.dev`  
+4. Pages 上的 `admin.html`／`api-config.js` 需指向該 Worker；合併到 `main` 後 GitHub Pages 會自動更新。
 
 可選備援：Cursor publish-app + Postgres（`server.mjs`）仍可運作，但**課堂繳交以 Cloudflare D1 為準**。
 
