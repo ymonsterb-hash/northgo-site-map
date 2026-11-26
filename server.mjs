@@ -418,7 +418,67 @@ async function serveStatic(req, res, pathname) {
     });
     return res.end(body);
   }
-  const relative = (decoded === "/" ? "/index.html" : decoded).replace(/^\/+/u, "");
+  // Hosted runtime may omit loose HTML; keep a tiny landing so "/" is not "Not found".
+  if (decoded === "/" || decoded === "/index.html") {
+    const foundHome = await readStaticFile("index.html");
+    if (foundHome) {
+      res.writeHead(200, {
+        ...corsHeaders(req),
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      return res.end(foundHome.data);
+    }
+    return sendHtml(
+      req,
+      res,
+      `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>NorthGo Inquiry API</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;margin:2rem;color:#13264b}a{color:#00aeb0}</style></head>
+<body><h1>NorthGo Inquiry API</h1>
+<p>這是後端 API 服務。請使用：</p>
+<ul>
+<li><a href="/admin.html">管理後台（此站）</a></li>
+<li><a href="https://ymonsterb-hash.github.io/northgo-site-map/admin.html">GitHub Pages 管理後台</a></li>
+<li><a href="https://ymonsterb-hash.github.io/northgo-site-map/freight-logistics.html">貨運詢問表單</a></li>
+</ul></body></html>`
+    );
+  }
+  if (decoded === "/freight-logistics.html") {
+    const foundFreight = await readStaticFile("freight-logistics.html");
+    if (foundFreight) {
+      res.writeHead(200, {
+        ...corsHeaders(req),
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      return res.end(foundFreight.data);
+    }
+    res.writeHead(302, {
+      ...corsHeaders(req),
+      Location: "https://ymonsterb-hash.github.io/northgo-site-map/freight-logistics.html"
+    });
+    return res.end();
+  }
+  if (decoded === "/VERSION") {
+    const foundVersion = await readStaticFile("VERSION");
+    if (foundVersion) {
+      res.writeHead(200, {
+        ...corsHeaders(req),
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      return res.end(foundVersion.data);
+    }
+    const body = Buffer.from("hosted\n", "utf8");
+    res.writeHead(200, {
+      ...corsHeaders(req),
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Content-Length": body.byteLength
+    });
+    return res.end(body);
+  }
+  const relative = decoded.replace(/^\/+/u, "");
   const found = await readStaticFile(relative);
   if (!found) {
     res.writeHead(404, { ...corsHeaders(req), "Content-Type": "text/plain; charset=utf-8" });
