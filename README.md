@@ -37,14 +37,33 @@
 ### 登入
 
 - 管理後台（GitHub Pages）：https://ymonsterb-hash.github.io/northgo-site-map/admin.html
-- API base：見 `api-config.js`
-- 帳密由 Cursor Apps secrets 提供（`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET`、`ALLOWED_ORIGINS`），不寫進原始碼或登入頁。
+- API base：見 `api-config.js`（功課路徑指向 Cloudflare Worker）
+- 帳密以 Cloudflare Worker secrets 為準（課堂示範帳號見作業說明／教師公告），不寫進原始碼。
 
-### 資料怎麼存
+### 資料怎麼存（功課路徑）
 
-1. **預設（耐久、免 wrangler）**：**Cursor publish-app** + Postgres（`cursor-app.json`、`server.mjs`、`migrations/`）。發布時選 **Public**，並在 Apps Secrets 設定管理帳密與 CORS。`api-config.js` 指向該公開 app 網址；也可直接開 Cursor app 上的 `/admin.html`（同網域 API）。
-2. **本機**：`npm install` 後以環境變數啟動（見下方）。
-3. **可選／舊版**：Cloudflare Worker + D1（`worker.js`）。需自行設定 Worker secrets；本作業不再依賴 Brenda 執行 wrangler。
+**GitHub Pages（前端）+ Cloudflare Worker + D1（後端／資料庫）**
+
+1. 程式已在 GitHub：`ymonsterb-hash/northgo-site-map`
+2. 在本機專案根目錄部署 Worker／D1（需 Node + Cloudflare 帳號）：
+
+```bash
+npm install
+npx wrangler login
+npx wrangler d1 migrations apply northgo-inquiries --remote
+npx wrangler secret put ADMIN_USERNAME
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put SESSION_SECRET
+npx wrangler secret put ALLOWED_ORIGIN
+npx wrangler deploy
+```
+
+`ALLOWED_ORIGIN` 請設為 `https://ymonsterb-hash.github.io`。
+
+3. 部署成功後 Worker：`https://northgo-inquiry-crud.ymonsterb.workers.dev`  
+4. `api-config.js` 已指向上述網址；合併到 `main` 後 GitHub Pages 會自動更新。
+
+可選備援：Cursor publish-app + Postgres（`server.mjs`）仍可運作，但**課堂繳交以 Cloudflare D1 為準**。
 
 ### 本機啟動
 
